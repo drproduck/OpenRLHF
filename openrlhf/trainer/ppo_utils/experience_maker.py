@@ -627,7 +627,8 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                 queries = self.tokenizer.batch_decode(sequences_list, skip_special_tokens=False)
 
             if self.custom_reward_func:
-                r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels)
+                # hard-code open-rlsp's reward function to include response length.
+                r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels, samples.labels,samples.response_length.cpu().tolist())
                 r_refs.append(r)
             else:
                 for rm in self.remote_rm_url:
