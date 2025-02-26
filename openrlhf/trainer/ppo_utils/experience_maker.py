@@ -195,6 +195,10 @@ class NaiveExperienceMaker(ABC):
         This method will first calculate the response sequences and rewards for the given prompts.
         Then, if we need certain processing for the rewards or do certain filtering, we can process the rollout as a whole.
         After that, we will calculate the advantages and returns for each experience.
+
+        args:
+            all_prompts: in PPOTrainer context, it's the batch (rollout_batch_size // actor_world_size).
+            all_labels: the labels for the prompts.
         """
         args = self.strategy.args
         samples_list = self.generate_samples(all_prompts, all_labels, **generate_kwargs)
@@ -260,11 +264,15 @@ class NaiveExperienceMaker(ABC):
     def generate_samples(self, all_prompts: List[str], all_labels, **generate_kwargs) -> List[Samples]:
         """
         Generate samples and return in batches.
+
+        args:
+            all_prompts: in PPOTrainer context, it's the batch (rollout_batch_size // actor_world_size).
         """
         assert not getattr(self, "packing_samples", False)
         args = self.strategy.args
         self.actor.eval()
         # sample multiple response
+        # NOTE: m prompt n samples --> m x n prompts 1 sample. also called scatter_samples
         all_prompts = sum([[prompt] * args.n_samples_per_prompt for prompt in all_prompts], [])
         all_labels = sum([[label] * args.n_samples_per_prompt for label in all_labels], [])
         samples_list = []
@@ -654,7 +662,10 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
         if value is not None:
             value = value.to(device)
         rewards = [r.to(device) for r in rewards]
-        r = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+        rr = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+        # r is the first column , grades is the second column
+        r = rr[:, 0]
+        grades = rr[:, 1]
 
         # avoid CUDA OOM when colocate models
         if args.colocate_critic_reward and not self.remote_rm_url:
@@ -697,6 +708,7 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
             "reward": r,
             "response_length": samples.response_length,
             "total_length": samples.total_length,
+            "grade": grades,
             "num_actions": num_actions,
         }
 
