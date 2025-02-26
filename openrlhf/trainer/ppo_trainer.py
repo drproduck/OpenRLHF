@@ -194,6 +194,7 @@ class PPOTrainer(ABC):
         consumed_samples=0,
         num_update_steps_per_episodes=1,
     ) -> None:
+        # NOTE: this is exactly number of batches because it cancels out terms in num_update_steps_per_episodes
         num_rollouts_per_episodes = (
             num_update_steps_per_episodes
             * args.train_batch_size
@@ -226,18 +227,24 @@ class PPOTrainer(ABC):
                 desc=f"Episode [{episode + 1}/{args.num_episodes}]",
                 disable=not self.strategy.is_rank_0(),
             )
-
             for rand_prompts, labels in self.prompts_dataloader:
+                # generate rollouts
+                # each experience contains micro_rollout_batch_size rollouts
                 for i, experience in enumerate(
                     self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
                 ):
                     if i == 0:
+                        self.strategy.print('==================Example rollout:')
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
                         )
                         self.strategy.print(output)
                     self.replay_buffer.append(experience)
+                
+                # replay_buffer contains rollout_batch_size // actor_world_size * n_samples_per_prompt rollouts.
+                # replay_buffer's append splits the Experience back to individual rollouts again
 
+                # NOTE: not sure what group_norm is used for.
                 if self.args.advantage_estimator != "group_norm":
                     self.replay_buffer.normalize("advantages", self.strategy)
                 status = self.ppo_train(steps)
@@ -337,6 +344,7 @@ class PPOTrainer(ABC):
         self.actor.train()
 
         # TODO: this is a bad indicator to say that data is packed...
+        # NOTE: it is packing samples here.
         if isinstance(experience.sequences, list):
             sequences = torch.cat(experience.sequences, dim=0).unsqueeze(0)
             old_action_log_probs = torch.cat(experience.action_log_probs, dim=0).unsqueeze(0)
