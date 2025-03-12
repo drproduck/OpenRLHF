@@ -66,8 +66,12 @@ def split_experience_batch(experience: Experience) -> List[BufferItem]:
 
     for i in range(batch_size):
         batch_kwargs[i]["info"] = {}
+
+    # NOTE: For logging, detensorize.
+    # support logging other non-tensor info e.g. extracted_answers
     for k, v in experience.info.items():
-        vals = torch.unbind(v)
+        if isinstance(v, torch.Tensor):
+            vals = torch.unbind(v)
         assert batch_size == len(vals)
         for i, vv in enumerate(vals):
             if isinstance(vv, torch.Tensor):

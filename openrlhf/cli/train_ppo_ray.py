@@ -412,6 +412,8 @@ if __name__ == "__main__":
     # ModelScope parameters
     parser.add_argument("--use_ms", action="store_true", default=False)
 
+    parser.add_argument("--length_penalty", type=float, default=0.0)
+
     args = parser.parse_args()
 
     if args.advantage_estimator not in ["gae"]:

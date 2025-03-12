@@ -239,7 +239,17 @@ class PPOTrainer(ABC):
                         output = self.tokenizer.batch_decode(
                             experience.sequences[0].unsqueeze(0), skip_special_tokens=True
                         )
-                        self.strategy.print(output)
+                        grade = experience.info['grade'][0]
+                        reward = experience.info['reward'][0]
+                        prediction = experience.info['prediction'][0]
+                        ground_truth = labels[0]
+                        self.strategy.print(
+                            f"PROMPT: {output}\n"
+                            f"TRUTH: {ground_truth}\n"
+                            f"PREDICTION: {prediction}\n"
+                            f"GRADE: {grade}\n"
+                            f"REWARD: {reward}\n"
+                        )
                     self.replay_buffer.append(experience)
                 
                 # replay_buffer contains rollout_batch_size // actor_world_size * n_samples_per_prompt rollouts.
@@ -468,6 +478,7 @@ class PPOTrainer(ABC):
         status = {"policy_loss": actor_loss.item(), "actor_lr": self.actor_scheduler.get_last_lr()[0]}
         if self.pretrain_dataloader is not None:
             status["ptx_loss"] = ptx_loss.item()
+        # grades and rewards as passed to logging here.
         for k, v in experience.info.items():
             if k == "kl":
                 status[k] = (

@@ -123,7 +123,7 @@ class CriticModelRayActor(BasePPORole):
         if args.load_checkpoint and os.path.exists(os.path.join(args.ckpt_path, "_actor")):
             ckpt_path = os.path.join(args.ckpt_path, "_critic")
             strategy.load_ckpt(self.critic, ckpt_path)
-            strategy.print(f"Loaded the checkpoint: {ckpt_path}")
+            strategy.print(f"==================Loaded the checkpoint: {ckpt_path}")
 
         # initial offload
         if strategy.args.deepspeed_enable_sleep:

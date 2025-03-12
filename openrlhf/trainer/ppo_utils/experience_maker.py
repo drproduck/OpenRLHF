@@ -168,6 +168,9 @@ class NaiveExperienceMaker(ABC):
             reward_module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(reward_module)
             self.custom_reward_func = reward_module.reward_func
+        if remote_rm_url and remote_rm_url[0] == 'math_verify':
+            from reward_func import reward_func
+            self.custom_reward_func = reward_func
 
     # tokenizer
     def tokenize_fn(self, texts, max_length, padding=True, device=None):
@@ -668,12 +671,25 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
                 if self.custom_reward_func:
                     # hard-code open-rlsp's reward function to include response length.
-                    r = self.custom_reward_func.remote(queries, samples.prompts, samples.labels, samples.labels,samples.response_length.cpu().tolist())
+                    r = self.custom_reward_func.remote(
+                            queries,
+                            samples.prompts,
+                            samples.labels,
+                            samples.response_length.cpu().tolist(),
+                            args.length_penalty)
                     r_refs.append(r)
                 else:
                     for rm in self.remote_rm_url:
-                        r = remote_rm_fn_ray.remote(rm, queries=queries, prompts=samples.prompts, labels=samples.labels)
-                        r_refs.append(r)
+                        score_keys = ["rewards", "grades"]
+                        # score_keys = "rewards"
+                        response = remote_rm_fn_ray.remote(
+                                rm,
+                                queries=queries,
+                                response_lengths=samples.response_length.cpu().tolist(),
+                                prompts=samples.prompt,
+                                labels=samples.labels,
+                                score_key=score_keys)
+                        r_refs.append(response)
             else:
                 r_refs.append(ray.put(None))
 
@@ -712,11 +728,17 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
                     rewards, src=self.strategy.ring_attn_ranks[0], group=self.strategy.ring_attn_group
                 )
 
-        rewards = [r.to(device) for r in rewards]
-        rr = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
-        # r is the first column , grades is the second column
-        r = rr[:, 0]
-        grades = rr[:, 1]
+        # rewards is a list of list of triples. the outer list is the number of RMs
+        # the inner list is the samples. each sample is a triple of (reward, grade, extracted_answers)
+        # rewards = [r.to(device) for r in rewards]
+        # rr = self.reward_fn(rewards) if len(rewards) > 0 else rewards[0]
+        # NOTE: For now we only support one reward model
+        assert len(rewards) == 1, "number of reward models"
+        assert len(rewards[0]) == len(samples.prompts), "number of samples"
+        assert len(rewards[0][0]) == 3, "reward, grade, extracted_answers"
+        reward_values = torch.tensor([prompt[0] for prompt in rewards[0]])
+        grades = torch.tensor([prompt[1] for prompt in rewards[0]])
+        predictions = [prompt[2] for prompt in rewards[0]]
 
         # avoid CUDA OOM when colocate models
         if args.colocate_critic_reward and not self.remote_rm_url:
@@ -769,10 +791,11 @@ class RemoteExperienceMaker(NaiveExperienceMaker):
 
         info = {
             "kl": kl_mean,
-            "reward": r,
+            "reward": reward_values,
             "response_length": samples.response_length,
             "total_length": samples.total_length,
             "grade": grades,
+            "prediction": predictions,
             "num_actions": num_actions,
         }
 
