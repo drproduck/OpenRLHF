@@ -22,7 +22,7 @@ from openrlhf.utils.distributed_util import init_process_group
 
 from .launcher import BasePPORole
 from .utils import get_physical_gpu_id
-
+import time
 
 class ActorPPOTrainer(PPOTrainer):
     def __init__(
@@ -127,18 +127,24 @@ class ActorPPOTrainer(PPOTrainer):
         torch.distributed.barrier()
         status = {}
 
+        critic_st_time = time.time()
         # 2. triger remote critic model training
         if self.critic_train_remote:
             # sync for deepspeed_enable_sleep
             if self.strategy.args.deepspeed_enable_sleep:
+                reload_st_time = time.time()
                 ray.get(self.critic.reload_states.remote())
+                self.timer['critic_reload_time'] = time.time() - reload_st_time
 
             critic_status_ref = self.critic.fit.remote()
 
             if self.strategy.args.colocate_all_models or self.strategy.args.deepspeed_enable_sleep:
                 status.update(ray.get(critic_status_ref))
+                self.timer['critic_train_time'] = time.time() - critic_st_time
             if self.strategy.args.deepspeed_enable_sleep:
+                offload_st_time = time.time()
                 ray.get(self.critic.offload_states.remote())
+                self.timer['critic_offload_time'] = time.time() - offload_st_time
 
         if self.strategy.args.colocate_all_models:
             torch.distributed.barrier()
@@ -146,17 +152,24 @@ class ActorPPOTrainer(PPOTrainer):
         # 3. actor model training
         if global_steps > self.freezing_actor_steps:
             if self.strategy.args.deepspeed_enable_sleep:
+                reload_st_time = time.time()
                 self.reload_states()
+                self.timer['actor_reload_time'] = time.time() - reload_st_time
 
+            actor_st_time = time.time()
             status.update(super().ppo_train(global_steps))
+            self.timer['actor_train_time'] = time.time() - actor_st_time
 
             if self.strategy.args.deepspeed_enable_sleep:
+                offload_st_time = time.time()
                 self.offload_states()
+                self.timer['actor_offload_time'] = time.time() - offload_st_time
 
             torch.cuda.empty_cache()
 
             # 4. broadcast weights to vllm engines
             if self.vllm_engines is not None:
+                vllm_st_time = time.time()
                 if self.strategy.args.vllm_enable_sleep:
                     batch_vllm_engine_call(self.vllm_engines, "wake_up")
 
@@ -168,6 +181,7 @@ class ActorPPOTrainer(PPOTrainer):
                     batch_vllm_engine_call(self.vllm_engines, "sleep")
                     torch.distributed.barrier()
                     torch.cuda.synchronize()
+                self.timer['vllm_update_time'] = time.time() - vllm_st_time
 
         # 5. wait remote critic model training done
         if self.critic_train_remote and not self.strategy.args.colocate_all_models:

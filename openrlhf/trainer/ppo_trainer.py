@@ -13,6 +13,7 @@ from openrlhf.models import Actor, GPTLMLoss, PolicyLoss, ValueLoss
 from openrlhf.models.ring_attn_utils import pad_sequences, unpad_sequences
 from openrlhf.models.utils import compute_approx_kl, masked_mean, unpacking_samples
 from openrlhf.utils.distributed_sampler import DistributedSampler
+import time
 
 from .ppo_utils import AdaptiveKLController, Experience, FixedKLController, NaiveExperienceMaker, NaiveReplayBuffer
 
@@ -187,6 +188,13 @@ class PPOTrainer(ABC):
             log_dir = os.path.join(self.strategy.args.use_tensorboard, strategy.args.wandb_run_name)
             self._tensorboard = SummaryWriter(log_dir=log_dir)
 
+        # record time
+        if strategy.perf:
+            from collections import defaultdict
+            self.timer = defaultdict(float)
+        else:
+            self.timer = None
+
     def fit(
         self,
         args,
@@ -231,6 +239,7 @@ class PPOTrainer(ABC):
             for rand_prompts, labels in self.prompts_dataloader:
                 # generate rollouts
                 # each experience contains micro_rollout_batch_size rollouts
+                st_time = time.time()
                 for i, experience in enumerate(
                     self.experience_maker.make_experience_list(rand_prompts, labels, **self.generate_kwargs)
                 ):
@@ -251,6 +260,7 @@ class PPOTrainer(ABC):
                             f"REWARD: {reward}\n"
                         )
                     self.replay_buffer.append(experience)
+                self.timer['inference_time'] = time.time() - st_time
                 
                 # replay_buffer contains rollout_batch_size // actor_world_size * n_samples_per_prompt rollouts.
                 # replay_buffer's append splits the Experience back to individual rollouts again
@@ -575,6 +585,9 @@ class PPOTrainer(ABC):
                 }
                 if self.experience_maker.perf_stats is not None:
                     logs.update({f"perf/experience_maker/{k}": v for k, v in self.experience_maker.perf_stats.items()})
+                if self.timer is not None:
+                    logs.update({f"perf/ppo_train/{k}": v for k, v in self.timer.items()})
+                    self.timer.clear()
                 self._wandb.log(logs)
             # TensorBoard
             elif self._tensorboard is not None and self.strategy.is_rank_0():
